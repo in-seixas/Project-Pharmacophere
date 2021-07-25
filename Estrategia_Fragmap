@@ -1,0 +1,200 @@
+from pymol import cmd as pm
+from pymol_labimm import commons
+
+
+
+caminho = '/home/gessualdo/Documentos/maps_fragmap/2HZI'
+
+ids = []
+value = []
+for atoms in pm.get_object_list('*D.0*'):
+    ids.append(atoms)
+    value.append(pm.count_atoms(atoms))
+ 
+key = {}
+for x, y in zip(ids, value):
+    key.update({x:y})
+    
+max_value = max(key.values())
+
+
+for hotspot, atoms in key.items():
+    if atoms == max_value:
+        druggable_hotspot = hotspot
+        print(druggable_hotspot)
+
+#Criar centro e esferas de exclusão 
+
+corr = pm.centerofmass(druggable_hotspot, state = 0)
+pm.pseudoatom('active_space', pos = corr, vdw = 5.0)
+pm.show('spheres', 'active_space')
+
+sele = pm.select(f'byres polymer within 5 of {druggable_hotspot}')
+pm.create('Active_site', 'sele')
+pm.hide('cartoon', 'Active_site')
+pm.show('spheres', 'Active_site')
+pm.save(f'{caminho}/Exclude_spheres.pdb', 'Active_site', 0, 'pdb')
+
+
+#Criar contorno em torno do hot spot druggable.
+
+def percent(valor):
+    min_ = valor[0][0] *1.1
+    max_ = valor[1][0] *1.1
+    
+    
+    
+    return [min_, max_]
+
+
+size = pm.get_extent(druggable_hotspot) #x 1.1
+
+min_x = size[0][0]
+max_x = size[1][0]
+min_y = size[0][1]
+max_y = size[1][1]
+
+
+#Criar arquivo com as coordenadas da grade
+
+pm.dump(f'{caminho}/apolar.txt', 'apolar')
+
+level = []
+x_coor = []
+y_coor = []
+z_coor = []
+
+with open(f'{caminho}/apolar.txt', 'r') as r:
+    for linha in r:
+        linha = linha.split()
+        if linha[3] != '0.0000':
+            
+            level.append(float(linha[3]))
+            x_coor.append(float(linha[0]))
+            y_coor.append(float(linha[1]))
+            z_coor.append(float(linha[2]))
+            
+x_extent = []
+y_extent = []
+z_extent = []
+level_extent = []
+
+
+for x, y, z, level in zip(x_coor, y_coor, z_coor, level):
+    
+    if x > min_x and y > min_y and x < max_x and y < max_y:
+        x_extent.append(float(x))
+        y_extent.append(float(y))
+        z_extent.append(float(z))
+        level_extent.append(float(level))
+    
+
+coordenadas = {}
+
+for x_, y_, z_, level_ in zip(x_extent, y_extent, z_extent, level_extent):
+    
+  coordenadas.update({level_:[x_, y_, z_]})
+  
+    
+ordenate_coordenaties = list(coordenadas.keys())
+ordenate_coordenaties.sort(reverse=True)
+
+CoorOfLevel01 = coordenadas.get(ordenate_coordenaties[0])
+CoorOfLevel02 = coordenadas.get(ordenate_coordenaties[1])
+CoorOfLevel03 = coordenadas.get(ordenate_coordenaties[2])
+CoorOfLevel04 = coordenadas.get(ordenate_coordenaties[3])
+CoorOfLevel05 = coordenadas.get(ordenate_coordenaties[4])
+CoorOfLevel06 = coordenadas.get(ordenate_coordenaties[5])
+CoorOfLevel07 = coordenadas.get(ordenate_coordenaties[6])
+CoorOfLevel08 = coordenadas.get(ordenate_coordenaties[7])
+CoorOfLevel09 = coordenadas.get(ordenate_coordenaties[8])
+CoorOfLevel10 = coordenadas.get(ordenate_coordenaties[9])
+    
+        
+pm.pseudoatom('apolar_center1', pos = CoorOfLevel01)
+pm.pseudoatom('apolar_center2', pos = CoorOfLevel02)
+pm.pseudoatom('apolar_center3', pos = CoorOfLevel03)
+pm.pseudoatom('apolar_center4', pos = CoorOfLevel04)
+pm.pseudoatom('apolar_center5', pos = CoorOfLevel05)
+pm.pseudoatom('apolar_center6', pos = CoorOfLevel06)
+pm.pseudoatom('apolar_center7', pos = CoorOfLevel07)
+pm.pseudoatom('apolar_center8', pos = CoorOfLevel08)
+pm.pseudoatom('apolar_center9', pos = CoorOfLevel09)
+pm.pseudoatom('apolar_center10', pos= CoorOfLevel10)
+    
+
+
+
+#verficar distância entre os centros e excluir os centros com mais de 2 A 
+
+
+def pontomedio(coordenadas):
+    
+    x_min = coordenadas[0][0]
+    y_min = coordenadas[0][1]
+    z_min = coordenadas[0][2]
+    
+    x_max = coordenadas[1][0]
+    y_max = coordenadas[1][1]
+    z_max = coordenadas[1][2]
+
+    x = (x_min + x_max)/2
+    y = (y_min + y_max)/2
+    z = (z_min + z_max)/2
+    
+    return [x, y, z]
+    
+
+
+#Primeira feature
+
+feats = []
+for index in range(2,11):
+    dist_ = pm.distance(f'dist_apolar{index}', 'apolar_center1', f'apolar_center{index}', cutoff = 2.0, mode = 4)
+   
+    if dist_ <= 1.0:
+        pm.delete(f'apolar_center{index}')
+        
+        
+    elif dist_ <= 2.0:
+        coor_of_dist  = pm.get_extent(f'dist_apolar{index}')
+        coor = pontomedio(coor_of_dist)
+        pm.delete(f'apolar_center{index}')
+        pm.pseudoatom(f'feat_apolar{index}', vdw = 1.5, pos = coor)
+           
+    elif dist_ > 2.0 and dist_ <= 5.0:
+        feats.append(f'apolar_center{index}')
+             
+    elif dist_ > 5.0:
+        pm.delete(f'apolar_center{index}') 
+ 
+ 
+#Segunda Feature 
+        
+for index_ in range(1, len(feats)):    
+    dist_ = pm.distance(f'dist2_apolar{index_}', feats[0], feats[index_], cutoff = 2.0, mode = 4.0)
+    
+    
+    if dist_ <= 1.0:
+        pm.delete(feats[index_])
+    
+    elif dist_ <= 2.0:
+        coor_of_dist = pm.get_extent(f'dist2_apolar{index_}')
+        coor = pontomedio(coor_of_dist) 
+        pm.delete(feats[index_])      
+        pm.pseudoatom(f'feat2_apolar{index_}', vdw = 1.5, pos = coor)  
+        
+    elif dist_ > 5.0:
+        pm.delete(feats[index_])     
+         
+print(feats)
+          
+pm.group('APOLAR_', 'apolar*')
+
+          
+pm.group('FEATS_APOLAR', 'feat_apolar*')          
+pm.group('FEATS_APOLAR', 'feat2_apolar*')                 
+                
+                
+pm.group('DISTANCE_APOLAR', 'dist_apolar*')
+pm.group('DISTANCE_APOLAR',  'dist2_apolar*')

@@ -1,3 +1,6 @@
+
+from pymol import cmd
+from drugpy.ftmap.core import load_atlas
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, silhouette_samples
 import pandas as pd
@@ -5,133 +8,203 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.spatial import distance
 import seaborn as sb
+import statistics
+from pharmacophore import InteractionKind, Feature, PharmacophoreJsonWriter
 
 
-#arquivo com todas as coordenadas e contornos dos mapas oriundos do Fragmap.
-#repetir esse processo para os três mapas
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 
-level = []
-x_coor = []
-y_coor = []
-z_coor = []
-
-with open('/home/gessualdo/Documentos/maps_fragmap/1L2S/apolar.txt', 'r') as r:
-    for linha in r:
-        linha = linha.split()
-        if linha[3] != '0.0000':
-            
-            level.append(float(linha[3]))
-            x_coor.append(float(linha[0]))
-            y_coor.append(float(linha[1]))
-            z_coor.append(float(linha[2]))
-            
-x_extent = []
-y_extent = []
-z_extent = []
-level_extent = []
-
-#filtro que irá determinar a utilização das coordenadas que estão próximas ao hot spot druggable
-for x, y, z, level in zip(x_coor, y_coor, z_coor, level):
-    if x >  47.706 and x < 55.780 and y > -5.813 and y <  4.497 and z > 18.428 and z < 27.674:
-        x_extent.append(float(x))
-        y_extent.append(float(y))
-        z_extent.append(float(z))
-        level_extent.append(float(level))
-             
-coordenadas = {}
-
-for x_, y_, z_, level_ in zip(x_extent, y_extent, z_extent, level_extent):
-    
-    coordenadas.update({level_:[x_, y_, z_]})
-  
-    
-ordenate_coordenaties = list(coordenadas.keys())
-ordenate_coordenaties.sort(reverse=True)
+caminhos = ('/home/gessualdo/Downloads/pharmacophore/3el8_atlas.pdb',
+            '/home/gessualdo/Downloads/hotspots_3el8.pse', 
+            '/home/gessualdo/Documentos/3el8' )
 
 
-coords_level = []
-for contourn in ordenate_coordenaties:
-    if contourn > 17:
-        coords_level.append(contourn)
-        
-    else:
-        coords_level.append(contourn)
-        
-coor_ = []
-for contourn_ in coords_level:
-    coor_.append(coordenadas.get(contourn_))
-    
-#Melhor score para o clusterização
+# In[31]:
 
-range_n_clusters = [2, 3, 4, 5, 6, 7, 8, 9, 10]
 
-X = coor_
+def get_coord_of_hotspot_from_ftmap(caminho_ftmap:str):
 
-score = []
-number_of_cluster = []
+    ftmap = load_atlas(caminho_ftmap, plot = False)
 
-for n_clusters in range_n_clusters:
-    
-    clusters = KMeans(n_clusters = n_clusters, random_state= 0)
-    cluster_labels = clusters.fit_predict(X)
-    
-    silhouette_avg = silhouette_score(X, cluster_labels)
-    
-    print('VALDAÇÃO DO NÚMERO DE CLUSTER --->',
-        'For n_clustes =', n_clusters, 
-         'The avarege score is =', silhouette_avg)
-        
-    score.append(silhouette_avg)
-    number_of_cluster.append(n_clusters)
-    
-plt.style.use("fivethirtyeight")
-plt.plot(range(2, 11), score)
-plt.xlabel("Number of Clusters")
-plt.ylabel("Silhouette Coefficient")
-plt.show()   
-        
-#utilizar o melhor score para determinar o valor de k -> métrica silhouette score. 
-#quanto > o valor do score, melhor a divisão de clusters.
-
-centerofmass_ = []    
-for ncluster, best_score in zip(number_of_cluster, score):
-    if best_score == max(score):
-        kmeans = KMeans(n_clusters = ncluster, random_state=0).fit(X)
-        centerofmass = kmeans.cluster_centers_
-        centerofmass_.append(centerofmass)
-        labels = kmeans.labels_             
-         
-feats = {} 
-radius = []
-for shape in range(0, len(centerofmass)):
-    x = {
-        f'feat_{shape}': centerofmass[shape].tolist()       
-    }
-    feats.update(x)
-    
-    df = pd.DataFrame(X)
-    df['labels'] = labels
-    df['contorno'] = coords_level
-    df = df.rename(columns={0:'x_coor', 1:'y_coor', 2:'z_coor'})
-    
-    #selecionar os 2 primeiros clusters de maior contorno 
-    max_contours = df.groupby('labels')['contorno'].sum()
-    value1 = max_contours[0]
-    value2 = max_contours[1]
+    objeto = caminho[0].split("/")[-1].split('.')[-2]
    
-    #filtrar o dataset pelo valor de clusterização (label)
-    
-    label = df[df['labels'] == shape]
-    
-    #selecionar a coordenada que representa 75% dos dados para o calculo de distância
-    quartis75 = label[['x_coor', 'y_coor', 'z_coor']].describe().T['25%']
-    #selecionar a coordenada máxima que represente o ponto mais distante do center of mass
-    max_coor = list(label.max()[0:3])
-    #selecionar a coordenada máxima que represente o ponto mais distante do center of mass
-    min_coor = list(label.min()[0:3])
-    #distância euclediana entre o centroide ou cluster center e ponto que represente 75% dos dados.
-    radius.append(distance.euclidean(quartis75, centerofmass.tolist()[shape]))
+    hotspots, clusters  = ftmap[objeto]
 
-    print(f'Coordenada da feat_{shape}:', list(feats.values())[shape], f'raio da feat_{shape}:', radius[shape])
+    max_s = 0
+    for hotspot in hotspots:
+        if hotspot.strength > max_s:
+            hotspot_max = hotspot
+            max_s = hotspot.strength
+
+    coorOfHotspot = cmd.get_extent(hotspot_max.selection)
+    
+    return coorOfHotspot
+
+
+
+def get_features_from_ftmap_and_fragmap(caminho_ftmap:str,
+                                        caminho_fragmap:str, 
+                                        caminho_dump:str, 
+                                        tipo:str, 
+                                        level:int
+                                        ):
+
+    coorOfHotspot = get_coord_of_hotspot_from_ftmap(caminho_ftmap)
+
+    x_min = coorOfHotspot[0][0]
+    x_max = coorOfHotspot[1][0]
+    y_min = coorOfHotspot[0][1]
+    y_max = coorOfHotspot[1][1]
+    z_min = coorOfHotspot[0][2]
+    z_max = coorOfHotspot[1][2]
+
+
+    cmd.load(caminho_fragmap)
+    cmd.dump(f'{caminho_dump}/{tipo}.txt', tipo)
+
+    level = []
+    x_coor = []
+    y_coor = []
+    z_coor = []
+
+    with open(f'{caminho_dump}/{tipo}.txt', 'r') as r:
+        for linha in r:
+            linha = linha.split()
+            if linha[3] != '0.0000':
+
+                level.append(float(linha[3]))
+                x_coor.append(float(linha[0]))
+                y_coor.append(float(linha[1]))
+                z_coor.append(float(linha[2]))
+
+    x_extent = []
+    y_extent = []
+    z_extent = []
+    level_extent = []
+
+    #filtro que irá determinar a utilização das coordenadas que estão próximas ao hot spot druggable
+    for x, y, z, level in zip(x_coor, y_coor, z_coor, level):
+        if x >  x_min and x < x_max and y > y_min and y <  y_max and z > z_min and z < z_max:
+            x_extent.append(float(x))
+            y_extent.append(float(y))
+            z_extent.append(float(z))
+            level_extent.append(float(level))
+
+    coordenadas = {}
+
+    for x_, y_, z_, level_ in zip(x_extent, y_extent, z_extent, level_extent):
+
+        coordenadas.update({level_:[x_, y_, z_]})
+
+
+    ordenate_coordenaties = list(coordenadas.keys())
+    ordenate_coordenaties.sort(reverse=True)
+
+
+    coords_level = []
+    for contourn in ordenate_coordenaties:
+        if contourn > level:
+            coords_level.append(contourn)
+            
+
+    coor_ = []
+    for contourn_ in coords_level:
+        coor_.append(coordenadas.get(contourn_))
+
+    #Melhor score para o clusterização
+
+    range_n_clusters = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+    X = coor_
+
+    score = []
+    number_of_cluster = []
+
+    for n_clusters in range_n_clusters:
+
+        clusters = KMeans(n_clusters = n_clusters, random_state= 0)
+        cluster_labels = clusters.fit_predict(X)
+
+        silhouette_avg = silhouette_score(X, cluster_labels)
+
+        score.append(silhouette_avg)
+        number_of_cluster.append(n_clusters)
+
+
+    #utilizar o melhor score para determinar o valor de k -> métrica silhouette score. 
+    #quanto > o valor do score, melhor a divisão de clusters.
+
+    centerofmass_ = []    
+    for ncluster, best_score in zip(number_of_cluster, score):
+        if best_score == max(score):
+            kmeans = KMeans(n_clusters = ncluster, random_state=0).fit(X)
+            centerofmass = kmeans.cluster_centers_
+            centerofmass_.append(centerofmass)
+            labels = kmeans.labels_             
+
+    feats = {} 
+    radius = []
+    points_and_radius = []
+    for shape in range(0, len(centerofmass)):
+        x = {
+            f'feat_{shape}': centerofmass[shape].tolist()       
+        }
+        feats.update(x)
+
+        df = pd.DataFrame(X)
+        df['labels'] = labels
+        df['contorno'] = coords_level
+        df = df.rename(columns={0:'x_coor', 1:'y_coor', 2:'z_coor'})
+
+        #selecionar os 2 primeiros clusters de maior contorno 
+        max_contours = df.groupby('labels')['contorno'].sum()
+        
+        #filtrar o dataset pelo valor de clusterização (label)
+
+        label = df[df['labels'] == shape]
+        coords = []
+        distance_ = []
+        for a in label.iterrows():
+            coords.append(a[1][0:3])
+
+        for xyz in coords:
+            xyz = list(xyz)
+
+            distance_.append(distance.euclidean(xyz, centerofmass[shape]))
+
+        points_and_radius.append((centerofmass[shape], statistics.mean(distance_)))        
+        
+    return points_and_radius, max_contours
+
+
+
+def build_pharmacophore(arquivo_saida:str, caminhos:tuple):
+    
+    points_and_radius_acceptor, _ = get_features_from_ftmap_and_fragmap(caminho[0], caminho[1], caminho[2], 'acceptor', 17)
+    points_and_radius_donor, _ = get_features_from_ftmap_and_fragmap(caminho[0], caminho[1], caminho[2], 'donor', 17)
+    points_and_radius_apolar, _ = get_features_from_ftmap_and_fragmap(caminho[0], caminho[1], caminho[2], 'apolar', 17)
+    
+    pharmacophore_writer = PharmacophoreJsonWriter()
+    
+    feats = []
+    for (x ,y, z), radius in points_and_radius_acceptor:
+        feats.append(Feature(InteractionKind.ACCEPTOR, x, y, z, radius))    
+    
+    for (x ,y, z), radius in points_and_radius_donor:
+        feats.append(Feature(InteractionKind.DONOR, x, y, z, radius))  
+    
+    for (x ,y, z), radius in points_and_radius_apolar:
+        feats.append(Feature(InteractionKind.HYDROPHOBIC, x, y, z, radius))
+
+    pharmacophore_writer.write(feats, arquivo_saida)  
+    
+    
+
+build_pharmacophore('/home/gessualdo/Documentos/3el8/feat.json', caminhos)
+
+
+
+
+

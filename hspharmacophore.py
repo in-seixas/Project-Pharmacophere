@@ -1,4 +1,3 @@
-
 from numpy import core
 from pymol import cmd
 from drugpy.ftmap.core import load_atlas
@@ -12,7 +11,6 @@ from scipy.spatial import distance
 import seaborn as sb
 import statistics
 from pharmacophore import InteractionKind, Feature, PharmacophoreJsonWriter
-
 
 
 
@@ -62,7 +60,7 @@ def get_active_site(caminho_ftmap:str, saida_active_site: str ):
 
     cmd.reinitialize()
         
- 
+
 
 
 def get_coord_of_hotspot(caminho_ftmap:str):
@@ -112,7 +110,6 @@ def get_coord_of_hotspot(caminho_ftmap:str):
 
 
 
-
 #Criar contorno em torno do hot spot druggable.
 
 
@@ -135,10 +132,10 @@ def get_features_from_ftmap_and_fragmap(caminho_ftmap:str,
     z_min = coorOfHotspot[0][2]
     z_max = coorOfHotspot[1][2]
     
-    
+
     cmd.load(caminho_fragmap, partial = 1)
     cmd.dump(f'{caminho_dump}/{tipo}.txt', tipo)
-
+    
 
     level = []
     coordenadas = []
@@ -149,24 +146,26 @@ def get_features_from_ftmap_and_fragmap(caminho_ftmap:str,
 
             if x >  x_min and x < x_max and y > y_min and y <  y_max and z > z_min and z < z_max and level >= level_param :
                 
-                dc = 1 + cmd.count_atoms(f'{chemical_class}. and  x > {x-2} and x < {x+2}' 
+                dc = 1 + cmd.count_atoms(f'name {chemical_class} and  x > {x-2} and x < {x+2}' 
                            f' and y > {y-2} and y < {y+2} and z > {z-2} and z < {z+2} and {hotspot_sel}')
         
                 coordenadas.append((level, dc, x, y, z))
-
+    
     get_key = lambda elem: elem[0]
     
     coordenadas.sort(key = get_key, reverse = True)
 
     df = pd.DataFrame(coordenadas, columns=["Nível", "Densidade", "X", "Y", "Z"])
 
+
     densidade = df["Densidade"].quantile(0.75)
 
     df.query("Densidade >= @densidade", inplace=True)
-   
+
+
     #Melhor score para o clusterização
 
-    range_n_clusters = range(2,4)
+    range_n_clusters = range(2,6)
 
     X = df.iloc[:, [2,3,4]]
 
@@ -185,6 +184,7 @@ def get_features_from_ftmap_and_fragmap(caminho_ftmap:str,
     #utilizar o melhor score para determinar o valor de k -> métrica silhouette score. 
     #quanto > o valor do score, melhor a divisão de clusters.
 
+    
     centroides = []    
     for ncluster, best_score in zip(range_n_clusters, score):
         if best_score == max(score):
@@ -203,46 +203,143 @@ def get_features_from_ftmap_and_fragmap(caminho_ftmap:str,
        
         #selecionar os 2 primeiros clusters de maior contorno 
         max_contours = df.groupby(['Labels'])['Densidade'].sum()
-        
-        
+
+
         df_k = df.loc[df['Labels'] == k]  
-        
+     
         distance_ = []
+
+       
         for row in df_k.iterrows():
             
             xyz = list(row[1][2:5])
 
             distance_.append(distance.euclidean(xyz, centroides[k]))
 
+
         points_and_radius.append((centroides[k], statistics.mean(distance_)*radius_mult, max_contours[k]))
 
+ 
         points_and_radius.sort(key= lambda x: x[2], reverse= True)
 
 
-        
+   
     return points_and_radius
+
+
+
+def get_density_correlation(caminho_ftmap, caminho_saida, level):
+
+    _, hs = get_coord_of_hotspot(caminho_ftmap)
+
+    points_and_radius_acceptor = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], "acceptor", "acc", level, 1)
+    points_and_radius_donor = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], "donor", "don*", level, 1)
+    points_and_radius_apolar = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], "apolar", "c*", level, 1)
+
+   
+    centers_acceptor = []
+   
+    for (x ,y, z), radius, _ in points_and_radius_acceptor:
+
+
+        dca = cmd.count_atoms(f' acc. and x > {x-2} and x < {x+2}' 
+                           f' and y > {y-2} and y < {y+2} and z > {z-2} and z < {z+2} and {hs}')
+
+
+        centers_acceptor.append({
+            "X, Y, Z":(x,y,z),
+            "TIPO":"ACCEPTOR",
+            "DC": dca
+
+        })       
+
+    centers_donor = []
+
+    for (x ,y, z), radius, _ in points_and_radius_donor:
+
+        dcd = cmd.count_atoms(f'don. and x > {x-2} and x < {x+2}' 
+                           f' and y > {y-2} and y < {y+2} and z > {z-2} and z < {z+2} and {hs}')
+
+        centers_donor.append({
+            "X, Y, Z":(x,y,z),
+            "TIPO":"DONOR",
+            "DC": dcd
+        })
+    
+
+    centers_apolar = []
+
+    for (x ,y, z), radius, _ in points_and_radius_apolar:
+
+        dch = cmd.count_atoms(f'c. and x > {x-2} and x < {x+2}' 
+                           f' and y > {y-2} and y < {y+2} and z > {z-2} and z < {z+2} and {hs}')
+
+        centers_apolar.append({
+            "X, Y, Z":(x,y,z),
+            "TIPO":"HYDROFOBIC",
+            "DC": dch
+        })
+
+    centers_model = list(centers_donor + centers_acceptor + centers_apolar)
+
+    centers_model.sort(key= lambda x : x["DC"], reverse= True)
+
+    feats = []
+
+    pharmacophore_writer = PharmacophoreJsonWriter()
+
+    for dicts in centers_model:
+        for key, values in dicts.items():
+
+            if dicts[key] == "ACCEPTOR":
+                
+                x = list(dicts.values())[0][0]
+                y = list(dicts.values())[0][1]
+                z = list(dicts.values())[0][2]
+                
+                feats.append(Feature(InteractionKind.ACCEPTOR, x, y, z, 1))
+            
+            elif dicts[key] == "DONOR":
+
+                x = list(dicts.values())[0][0]
+                y = list(dicts.values())[0][1]
+                z = list(dicts.values())[0][2]
+
+            
+                feats.append(Feature(InteractionKind.DONOR, x, y, z, 1))
+
+            elif dicts[key] == "HYDROFOBIC":
+
+
+                x = list(dicts.values())[0][0]
+                y = list(dicts.values())[0][1]
+                z = list(dicts.values())[0][2]
+
+                feats.append(Feature(InteractionKind.HYDROPHOBIC, x, y, z, 1))       
+
+    pharmacophore_writer.write(feats, caminho_saida)
 
 
 
 
 def build_pharmacophore(arquivo_saida:str, caminhos:tuple):
     
-    points_and_radius_acceptor = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'acceptor', "acc", 14, 1)
-    points_and_radius_donor = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'donor', "don", 14, 1)
-    points_and_radius_apolar = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'apolar', "c", 14, 1)
+    points_and_radius_acceptor = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'acceptor', "acc", 10, 1)
+    points_and_radius_donor = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'donor', "don", 10, 1)
+    points_and_radius_apolar = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'apolar', "c", 10, 1)
     
     pharmacophore_writer = PharmacophoreJsonWriter()
     
     feats = []
     for (x ,y, z), radius, _ in points_and_radius_acceptor:
 
-        if radius > 1.5:
+        if radius > 1.0:
     
-            feats.append(Feature(InteractionKind.ACCEPTOR, x, y, z, 1.5)) 
+            feats.append(Feature(InteractionKind.ACCEPTOR, x, y, z, 1.0)) 
 
-        elif radius < 1.0:
+        elif radius < 0.5:
 
-            feats.append(Feature(InteractionKind.ACCEPTOR, x, y, z, 1.0))
+            feats.append(Feature(InteractionKind.ACCEPTOR, x, y, z, 0.5))
 
         else:
 
@@ -251,13 +348,13 @@ def build_pharmacophore(arquivo_saida:str, caminhos:tuple):
 
     for (x ,y, z), radius, _ in points_and_radius_donor:
 
-        if radius > 1.5:
-
-            feats.append(Feature(InteractionKind.DONOR, x, y, z, 1.5))
-
-        elif radius < 1.0:
+        if radius > 1.0:
 
             feats.append(Feature(InteractionKind.DONOR, x, y, z, 1.0))
+
+        elif radius < 0.5:
+
+            feats.append(Feature(InteractionKind.DONOR, x, y, z, 0.5))
 
         else:
 
@@ -265,7 +362,7 @@ def build_pharmacophore(arquivo_saida:str, caminhos:tuple):
         
     for (x ,y, z), radius, _ in points_and_radius_apolar:
 
-        if radius > 1.5:
+        if radius > 1.2:
 
             feats.append(Feature(InteractionKind.HYDROPHOBIC, x, y, z, 1.5)) 
 
@@ -278,116 +375,3 @@ def build_pharmacophore(arquivo_saida:str, caminhos:tuple):
             feats.append(Feature(InteractionKind.HYDROPHOBIC, x, y, z, radius))
                 
     pharmacophore_writer.write(feats, arquivo_saida)
-    
-    
-
- 
-
-def create_psudoatom(arquivo_saida:str, caminhos:tuple):
-    
-    points_and_radius_acceptor = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'acceptor', "acc", 14, 1)
-    points_and_radius_donor = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'donor', "don", 14, 1)
-    points_and_radius_apolar = get_features_from_ftmap_and_fragmap(caminhos[0], caminhos[1], caminhos[2], 'apolar', "c", 14, 1)
-    
-
-    n_acceptor = range(0, len(points_and_radius_acceptor))
-    n_donor = range(0, len(points_and_radius_donor))
-    n_apolar = range(0, len(points_and_radius_apolar))
- 
-    for indice, ((x ,y, z), radius, _) in zip(n_acceptor, points_and_radius_acceptor):
-
-        if radius > 1.5:
-            
-            cmd.pseudoatom(f"tmp_acceptor_{indice}", pos= [x, y, z], vdw= 1.5)
-
-        if radius < 1.0:
-
-            cmd.pseudoatom(f"tmp_acceptor_{indice}", pos= [x, y, z], vdw= 1.0) 
-
-        else:
-
-            cmd.pseudoatom(f"tmp_acceptor_{indice}", pos= [x, y, z], vdw= radius)
-
-
-
-    for indice, ((x ,y, z), radius, _) in zip(n_donor, points_and_radius_donor):
-
-        if radius > 1.5:
-            
-            cmd.pseudoatom(f"tmp_donor_{indice}", pos= [x, y, z], vdw= 1.5)
-
-        if radius < 1.0:
-
-            cmd.pseudoatom(f"tmp_donor_{indice}", pos= [x, y, z], vdw= 1.0) 
-
-        else:
-
-            cmd.pseudoatom(f"tmp_donor_{indice}", pos= [x, y, z], vdw= radius)
-
-
-    for indice, ((x ,y, z), radius, _) in zip(n_apolar, points_and_radius_apolar):
-
-        if radius > 1.5:
-            
-            cmd.pseudoatom(f"tmp_apolar_{indice}", pos= [x, y, z], vdw= 1.5)
-
-        if radius < 1.0:
-
-            cmd.pseudoatom(f"tmp_apolar_{indice}", pos= [x, y, z], vdw= 1.0) 
-
-        else:
-
-            cmd.pseudoatom(f"tmp_apolar_{indice}", pos= [x, y, z], vdw= radius)
-
-
-    cmd.show("sphere", "tmp*")
-    cmd.color("yellow", "tmp_apol*")
-    cmd.color("red", "tmp_acc*")
-    cmd.color("blue", "tmp_don*")
-    cmd.set("sphere_transparency", 0.5)
-
-
-    cmd.save(arquivo_saida, selection= "(all)", format= "pse")
-    cmd.reinitialize()
-
-
-caminhos = [
-    "/home/gessualdosoj/Downloads/results_atlas_gessualdo.tar.gz/3eml_box_v2.pdb",
-    "/home/gessualdosoj/Documentos/modelos/3eml/hotspots_3eml_active_site.pse",
-    "/home/gessualdosoj/Documentos/modelos/3eml",
-    "/home/gessualdosoj/Documentos/modelos/3eml/pharma_14.json"]
-    
-
-
-
-
-build_pharmacophore(caminhos[3], caminhos)
-
-
-#get_active_site(caminhos[0], caminhos[2])
-
-
-       
-
-#create_psudoatom(caminhos[3], caminhos)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
